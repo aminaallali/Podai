@@ -1,0 +1,120 @@
+import type { Metadata } from 'next';
+import { Inter, Roboto } from 'next/font/google';
+import { Toaster } from 'react-hot-toast';
+import Sidebar from '@/components/layout/Sidebar';
+import Player from '@/components/player/Player';
+import Navbar from '@/components/layout/Navbar';
+import '../styles/globals.css';
+
+// Font optimization
+const inter = Inter({ 
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-inter',
+});
+
+const roboto = Roboto({ 
+  weight: ['400', '500', '700'],
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-roboto',
+});
+
+// Metadata configuration
+export const metadata: Metadata = {
+  title: 'Podcast Maker - Create AI-Generated Podcasts',
+  description: 'Create, customize, and share AI-generated podcasts with realistic voices and engaging content',
+  keywords: ['podcast', 'AI', 'text-to-speech', 'content creation', 'audio generation'],
+  authors: [{ name: 'Podcast Maker Team' }],
+  creator: 'Podcast Maker',
+  publisher: 'Podcast Maker',
+  openGraph: {
+    title: 'Podcast Maker - AI-Generated Podcasts',
+    description: 'Create professional podcasts with AI-generated scripts and realistic voices',
+    url: 'https://podcast-maker.app',
+    siteName: 'Podcast Maker',
+    images: [
+      {
+        url: '/images/og-image.jpg',
+        width: 1200,
+        height: 630,
+        alt: 'Podcast Maker',
+      },
+    ],
+    locale: 'en_US',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Podcast Maker - AI-Generated Podcasts',
+    description: 'Create professional podcasts with AI-generated scripts and realistic voices',
+    images: ['/images/twitter-image.jpg'],
+  },
+  viewport: {
+    width: 'device-width',
+    initialScale: 1,
+    maximumScale: 1,
+  },
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#121212' },
+  ],
+};
+
+// Layout props interface
+interface RootLayoutProps {
+  children: React.ReactNode;
+}
+
+export default function RootLayout({ children }: RootLayoutProps) {
+  return (
+    <html lang="en" className={`${inter.variable} ${roboto.variable}`}>
+      <body className="bg-spotify-black text-white">
+        <div className="app-container">
+          {/* Sidebar navigation */}
+          <Sidebar />
+          
+          {/* Main content area */}
+          <div className="main-content ml-0 md:ml-[var(--sidebar-width)]">
+            {/* Top navigation bar */}
+            <Navbar />
+            
+            {/* Page content */}
+            <main className="p-[var(--content-padding)] pt-[calc(var(--nav-height)+var(--content-padding))]">
+              {children}
+            </main>
+          </div>
+          
+          {/* Audio player */}
+          <Player />
+          
+          {/* Toast notifications */}
+          <Toaster
+            position="bottom-right"
+            toastOptions={{
+              duration: 5000,
+              style: {
+                background: 'var(--spotify-gray-700)',
+                color: '#fff',
+                borderRadius: '8px',
+                padding: '16px',
+              },
+              success: {
+                iconTheme: {
+                  primary: 'var(--spotify-green)',
+                  secondary: '#000',
+                },
+              },
+              error: {
+                iconTheme: {
+                  primary: '#E9446F',
+                  secondary: '#000',
+                },
+              },
+            }}
+          />
+        </div>
+      </body>
+    </html>
+  );
+}

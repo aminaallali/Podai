@@ -1,0 +1,866 @@
+'use client';
+
+import { useState, useEffect, useRef } from 'react';
+import Image from 'next/image';
+import ReactPlayer from 'react-player';
+import { toast } from 'react-hot-toast';
+import { 
+  FiPlay, 
+  FiPause, 
+  FiSkipBack, 
+  FiSkipForward, 
+  FiVolume2, 
+  FiVolumeX, 
+  FiHeart, 
+  FiRepeat, 
+  FiShuffle, 
+  FiList, 
+  FiMaximize2, 
+  FiMinimize2,
+  FiX
+} from 'react-icons/fi';
+import { Podcast, recordPodcastPlay, createLocalStorageProvider } from '@/lib/podcast-utils';
+
+// Component interfaces
+interface PlayerProps {
+  className?: string;
+}
+
+interface QueueItem {
+  id: string;
+  title: string;
+  artist: string;
+  coverUrl?: string;
+  audioUrl: string;
+  duration: number;
+  podcast: Podcast;
+}
+
+interface PlayerControlsProps {
+  isPlaying: boolean;
+  onPlayPause: () => void;
+  onSkipPrevious: () => void;
+  onSkipNext: () => void;
+  isShuffleActive: boolean;
+  onShuffleToggle: () => void;
+  repeatMode: RepeatMode;
+  onRepeatToggle: () => void;
+  disabled: boolean;
+}
+
+interface ProgressBarProps {
+  currentTime: number;
+  duration: number;
+  onSeek: (time: number) => void;
+  buffered: number;
+}
+
+interface VolumeControlProps {
+  volume: number;
+  onVolumeChange: (volume: number) => void;
+  isMuted: boolean;
+  onMuteToggle: () => void;
+}
+
+interface NowPlayingProps {
+  currentItem: QueueItem | null;
+  isLiked: boolean;
+  onToggleLike: () => void;
+}
+
+interface QueueProps {
+  queue: QueueItem[];
+  currentIndex: number;
+  onSelectTrack: (index: number) => void;
+  onClose: () => void;
+}
+
+type RepeatMode = 'off' | 'all' | 'one';
+
+// Main Player Component
+export default function Player({ className = '' }: PlayerProps) {
+  // State for player
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.8);
+  const [isMuted, setIsMuted] = useState(false);
+  const [buffered, setBuffered] = useState(0);
+  const [isLiked, setIsLiked] = useState(false);
+  const [isShuffleActive, setIsShuffleActive] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
+  const [showQueue, setShowQueue] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  
+  // Queue management
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [originalQueue, setOriginalQueue] = useState<QueueItem[]>([]);
+  
+  // Refs
+  const playerRef = useRef<ReactPlayer | null>(null);
+  const progressInterval = useRef<NodeJS.Timeout | null>(null);
+  const storageProvider = createLocalStorageProvider();
+  
+  // Current track
+  const currentItem = queue.length > 0 ? queue[currentIndex] : null;
+  
+  // Initialize player with mock data for demonstration
+  useEffect(() => {
+    const loadInitialPodcasts = async () => {
+      try {
+        // Get podcasts from storage
+        const podcasts = await storageProvider.listPodcasts({ limit: 5 });
+        
+        if (podcasts.length > 0) {
+          // Create queue items from podcasts
+          const queueItems: QueueItem[] = podcasts
+            .filter(podcast => podcast.audioUrl) // Only include podcasts with audio
+            .map(podcast => ({
+              id: podcast.id,
+              title: podcast.title,
+              artist: podcast.metadata.speakers.join(', ') || 'Unknown',
+              coverUrl: podcast.coverImageUrl,
+              audioUrl: podcast.audioUrl || '',
+              duration: podcast.duration,
+              podcast
+            }));
+          
+          if (queueItems.length > 0) {
+            setQueue(queueItems);
+            setOriginalQueue(queueItems);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load initial podcasts:', error);
+      }
+    };
+    
+    loadInitialPodcasts();
+    
+    // Clean up interval on unmount
+    return () => {
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current);
+      }
+    };
+  }, []);
+  
+  // Update progress bar during playback
+  useEffect(() => {
+    if (isPlaying) {
+      progressInterval.current = setInterval(() => {
+        if (playerRef.current) {
+          setCurrentTime(playerRef.current.getCurrentTime());
+          
+          // Update buffered amount
+          const bufferedSeconds = 
+            playerRef.current.getSecondsLoaded() || 0;
+          setBuffered(bufferedSeconds);
+        }
+      }, 1000);
+    } else if (progressInterval.current) {
+      clearInterval(progressInterval.current);
+    }
+    
+    return () => {
+      if (progressInterval.current) {
+        clearInterval(progressInterval.current);
+      }
+    };
+  }, [isPlaying]);
+  
+  // Handle track ending
+  const handleTrackEnded = () => {
+    if (repeatMode === 'one') {
+      // Repeat current track
+      if (playerRef.current) {
+        playerRef.current.seekTo(0);
+        setCurrentTime(0);
+        setIsPlaying(true);
+      }
+    } else if (currentIndex < queue.length - 1) {
+      // Play next track
+      setCurrentIndex(currentIndex + 1);
+    } else if (repeatMode === 'all') {
+      // Start queue over
+      setCurrentIndex(0);
+    } else {
+      // End of queue, stop playing
+      setIsPlaying(false);
+      setCurrentTime(0);
+    }
+  };
+  
+  // Record play when a significant portion has been played
+  useEffect(() => {
+    if (currentItem && duration > 0) {
+      const playThreshold = duration * 0.3; // 30% of the track
+      
+      if (currentTime >= playThreshold) {
+        // Record play in podcast stats
+        const updatePodcastStats = async () => {
+          try {
+            const podcast = currentItem.podcast;
+            const updatedPodcast = recordPodcastPlay(podcast, currentTime);
+            
+            // Save updated podcast
+            await storageProvider.savePodcast(updatedPodcast);
+          } catch (error) {
+            console.error('Failed to update podcast play stats:', error);
+          }
+        };
+        
+        updatePodcastStats();
+      }
+    }
+  }, [currentTime, duration, currentItem]);
+  
+  // Player control handlers
+  const handlePlayPause = () => {
+    if (queue.length === 0) {
+      toast.error('No podcasts in queue');
+      return;
+    }
+    setIsPlaying(!isPlaying);
+  };
+  
+  const handleSkipPrevious = () => {
+    if (currentTime > 3) {
+      // If more than 3 seconds into track, go back to start
+      if (playerRef.current) {
+        playerRef.current.seekTo(0);
+        setCurrentTime(0);
+      }
+    } else if (currentIndex > 0) {
+      // Otherwise go to previous track
+      setCurrentIndex(currentIndex - 1);
+    }
+  };
+  
+  const handleSkipNext = () => {
+    if (currentIndex < queue.length - 1) {
+      setCurrentIndex(currentIndex + 1);
+    } else if (repeatMode === 'all') {
+      setCurrentIndex(0);
+    }
+  };
+  
+  const handleSeek = (time: number) => {
+    if (playerRef.current) {
+      playerRef.current.seekTo(time);
+      setCurrentTime(time);
+    }
+  };
+  
+  const handleVolumeChange = (newVolume: number) => {
+    setVolume(newVolume);
+    if (newVolume > 0 && isMuted) {
+      setIsMuted(false);
+    }
+  };
+  
+  const handleMuteToggle = () => {
+    setIsMuted(!isMuted);
+  };
+  
+  const handleToggleLike = () => {
+    setIsLiked(!isLiked);
+    
+    if (!isLiked && currentItem) {
+      toast.success(`Added "${currentItem.title}" to your Liked Podcasts`);
+    }
+  };
+  
+  const handleShuffleToggle = () => {
+    if (isShuffleActive) {
+      // Restore original queue order
+      setQueue([...originalQueue]);
+      
+      // Find current track in original queue
+      if (currentItem) {
+        const newIndex = originalQueue.findIndex(item => item.id === currentItem.id);
+        if (newIndex !== -1) {
+          setCurrentIndex(newIndex);
+        }
+      }
+      
+      setIsShuffleActive(false);
+    } else {
+      // Save original queue if not already saved
+      if (originalQueue.length === 0) {
+        setOriginalQueue([...queue]);
+      }
+      
+      // Shuffle queue except current track
+      const currentTrack = queue[currentIndex];
+      const tracksToShuffle = queue.filter((_, i) => i !== currentIndex);
+      
+      // Fisher-Yates shuffle algorithm
+      for (let i = tracksToShuffle.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [tracksToShuffle[i], tracksToShuffle[j]] = [tracksToShuffle[j], tracksToShuffle[i]];
+      }
+      
+      // Put current track at the beginning and update queue
+      const shuffledQueue = [currentTrack, ...tracksToShuffle];
+      setQueue(shuffledQueue);
+      setCurrentIndex(0);
+      setIsShuffleActive(true);
+    }
+  };
+  
+  const handleRepeatToggle = () => {
+    // Cycle through repeat modes: off -> all -> one -> off
+    if (repeatMode === 'off') {
+      setRepeatMode('all');
+      toast.success('Repeat all tracks');
+    } else if (repeatMode === 'all') {
+      setRepeatMode('one');
+      toast.success('Repeat current track');
+    } else {
+      setRepeatMode('off');
+      toast.success('Repeat off');
+    }
+  };
+  
+  const handleQueueToggle = () => {
+    setShowQueue(!showQueue);
+  };
+  
+  const handleSelectTrack = (index: number) => {
+    setCurrentIndex(index);
+    setIsPlaying(true);
+  };
+  
+  const handleExpandToggle = () => {
+    setIsExpanded(!isExpanded);
+  };
+  
+  // Player event handlers
+  const handlePlayerReady = () => {
+    if (playerRef.current) {
+      setDuration(playerRef.current.getDuration());
+    }
+  };
+  
+  const handlePlayerStart = () => {
+    if (playerRef.current) {
+      setDuration(playerRef.current.getDuration());
+    }
+  };
+  
+  const handlePlayerError = (error: any) => {
+    console.error('Player error:', error);
+    toast.error('Error playing podcast');
+    
+    // Skip to next track if available
+    if (currentIndex < queue.length - 1) {
+      handleSkipNext();
+    }
+  };
+  
+  return (
+    <div 
+      className={`audio-player ${isExpanded ? 'h-[calc(100vh-var(--nav-height))]' : ''} ${className}`}
+      aria-label="Audio player"
+    >
+      {/* Hidden audio player */}
+      <div className="hidden">
+        {currentItem && (
+          <ReactPlayer
+            ref={playerRef}
+            url={currentItem.audioUrl}
+            playing={isPlaying}
+            volume={isMuted ? 0 : volume}
+            onReady={handlePlayerReady}
+            onStart={handlePlayerStart}
+            onEnded={handleTrackEnded}
+            onError={handlePlayerError}
+            width="0"
+            height="0"
+          />
+        )}
+      </div>
+      
+      {/* Expanded player view */}
+      {isExpanded && (
+        <div className="absolute inset-0 bg-gradient-to-b from-spotify-gray-800 to-spotify-black flex flex-col p-6">
+          <div className="flex justify-end mb-4">
+            <button 
+              onClick={handleExpandToggle}
+              className="text-spotify-gray-300 hover:text-white p-2"
+              aria-label="Minimize player"
+            >
+              <FiMinimize2 size={20} />
+            </button>
+          </div>
+          
+          <div className="flex flex-col md:flex-row items-center justify-center flex-grow gap-8">
+            {/* Album art */}
+            <div className="w-64 h-64 md:w-80 md:h-80 bg-spotify-gray-600 rounded-lg overflow-hidden shadow-lg">
+              {currentItem?.coverUrl ? (
+                <Image 
+                  src={currentItem.coverUrl} 
+                  alt={currentItem.title} 
+                  width={320} 
+                  height={320} 
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-podcast-accent-purple to-podcast-accent-blue">
+                  <FiPlay className="text-white text-5xl" />
+                </div>
+              )}
+            </div>
+            
+            {/* Track info and controls */}
+            <div className="flex flex-col items-center md:items-start max-w-md">
+              <h2 className="text-2xl md:text-3xl font-bold text-white mb-2">{currentItem?.title || 'No track playing'}</h2>
+              <p className="text-spotify-gray-300 text-lg mb-8">{currentItem?.artist || 'Unknown artist'}</p>
+              
+              {/* Progress bar */}
+              <div className="w-full mb-6">
+                <ProgressBar 
+                  currentTime={currentTime} 
+                  duration={duration} 
+                  onSeek={handleSeek} 
+                  buffered={buffered}
+                />
+              </div>
+              
+              {/* Controls */}
+              <div className="flex flex-col items-center w-full">
+                <PlayerControls 
+                  isPlaying={isPlaying}
+                  onPlayPause={handlePlayPause}
+                  onSkipPrevious={handleSkipPrevious}
+                  onSkipNext={handleSkipNext}
+                  isShuffleActive={isShuffleActive}
+                  onShuffleToggle={handleShuffleToggle}
+                  repeatMode={repeatMode}
+                  onRepeatToggle={handleRepeatToggle}
+                  disabled={!currentItem}
+                />
+                
+                <div className="mt-8 w-full flex justify-center">
+                  <VolumeControl 
+                    volume={volume}
+                    onVolumeChange={handleVolumeChange}
+                    isMuted={isMuted}
+                    onMuteToggle={handleMuteToggle}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Compact player view */}
+      {!isExpanded && (
+        <div className="w-full grid grid-cols-3 h-full">
+          {/* Left: Now playing */}
+          <div className="flex items-center">
+            <NowPlaying 
+              currentItem={currentItem} 
+              isLiked={isLiked} 
+              onToggleLike={handleToggleLike} 
+            />
+          </div>
+          
+          {/* Center: Controls and progress */}
+          <div className="flex flex-col justify-center items-center">
+            <PlayerControls 
+              isPlaying={isPlaying}
+              onPlayPause={handlePlayPause}
+              onSkipPrevious={handleSkipPrevious}
+              onSkipNext={handleSkipNext}
+              isShuffleActive={isShuffleActive}
+              onShuffleToggle={handleShuffleToggle}
+              repeatMode={repeatMode}
+              onRepeatToggle={handleRepeatToggle}
+              disabled={!currentItem}
+            />
+            
+            <div className="w-full mt-1 px-4">
+              <ProgressBar 
+                currentTime={currentTime} 
+                duration={duration} 
+                onSeek={handleSeek} 
+                buffered={buffered}
+              />
+            </div>
+          </div>
+          
+          {/* Right: Volume, queue, expand */}
+          <div className="flex items-center justify-end">
+            <div className="hidden md:block mr-4">
+              <VolumeControl 
+                volume={volume}
+                onVolumeChange={handleVolumeChange}
+                isMuted={isMuted}
+                onMuteToggle={handleMuteToggle}
+              />
+            </div>
+            
+            <button 
+              onClick={handleQueueToggle}
+              className={`player-control-button mr-3 text-lg ${showQueue ? 'text-spotify-green' : 'text-spotify-gray-300 hover:text-white'}`}
+              aria-label="Show queue"
+            >
+              <FiList />
+            </button>
+            
+            <button 
+              onClick={handleExpandToggle}
+              className="player-control-button mr-4 text-spotify-gray-300 hover:text-white text-lg"
+              aria-label="Expand player"
+            >
+              <FiMaximize2 />
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Queue sidebar */}
+      {showQueue && (
+        <div className="fixed right-0 top-0 bottom-0 w-80 bg-spotify-gray-800 shadow-lg z-[var(--z-player)] overflow-y-auto">
+          <Queue 
+            queue={queue}
+            currentIndex={currentIndex}
+            onSelectTrack={handleSelectTrack}
+            onClose={handleQueueToggle}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Player Controls Component
+const PlayerControls: React.FC<PlayerControlsProps> = ({
+  isPlaying,
+  onPlayPause,
+  onSkipPrevious,
+  onSkipNext,
+  isShuffleActive,
+  onShuffleToggle,
+  repeatMode,
+  onRepeatToggle,
+  disabled
+}) => {
+  return (
+    <div className="player-controls">
+      <button 
+        onClick={onShuffleToggle}
+        className={`player-control-button ${isShuffleActive ? 'text-spotify-green' : 'text-spotify-gray-300 hover:text-white'}`}
+        aria-label="Toggle shuffle"
+        disabled={disabled}
+      >
+        <FiShuffle />
+      </button>
+      
+      <button 
+        onClick={onSkipPrevious}
+        className="player-control-button text-spotify-gray-300 hover:text-white text-lg"
+        aria-label="Previous track"
+        disabled={disabled}
+      >
+        <FiSkipBack />
+      </button>
+      
+      <button 
+        onClick={onPlayPause}
+        className="play-button"
+        aria-label={isPlaying ? 'Pause' : 'Play'}
+        disabled={disabled}
+      >
+        {isPlaying ? <FiPause size={20} /> : <FiPlay size={20} />}
+      </button>
+      
+      <button 
+        onClick={onSkipNext}
+        className="player-control-button text-spotify-gray-300 hover:text-white text-lg"
+        aria-label="Next track"
+        disabled={disabled}
+      >
+        <FiSkipForward />
+      </button>
+      
+      <button 
+        onClick={onRepeatToggle}
+        className={`player-control-button ${
+          repeatMode !== 'off' ? 'text-spotify-green' : 'text-spotify-gray-300 hover:text-white'
+        }`}
+        aria-label="Toggle repeat"
+        disabled={disabled}
+      >
+        <FiRepeat />
+        {repeatMode === 'one' && (
+          <span className="absolute text-[8px] font-bold">1</span>
+        )}
+      </button>
+    </div>
+  );
+};
+
+// Progress Bar Component
+const ProgressBar: React.FC<ProgressBarProps> = ({
+  currentTime,
+  duration,
+  onSeek,
+  buffered
+}) => {
+  const progressBarRef = useRef<HTMLDivElement>(null);
+  
+  // Format time as mm:ss
+  const formatTime = (seconds: number): string => {
+    if (isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+  
+  // Calculate progress percentages
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const bufferedPercent = duration > 0 ? (buffered / duration) * 100 : 0;
+  
+  // Handle click on progress bar
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!progressBarRef.current) return;
+    
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const clickPosition = (e.clientX - rect.left) / rect.width;
+    const seekTime = clickPosition * duration;
+    
+    onSeek(seekTime);
+  };
+  
+  return (
+    <div className="w-full flex items-center gap-2">
+      <span className="text-xs text-spotify-gray-300 w-10 text-right">
+        {formatTime(currentTime)}
+      </span>
+      
+      <div 
+        ref={progressBarRef}
+        className="progress-bar flex-grow cursor-pointer"
+        onClick={handleProgressClick}
+      >
+        {/* Buffered progress */}
+        <div 
+          className="absolute h-full bg-spotify-gray-600 rounded-full"
+          style={{ width: `${bufferedPercent}%` }}
+        />
+        
+        {/* Playback progress */}
+        <div 
+          className="progress-bar-fill relative"
+          style={{ width: `${progressPercent}%` }}
+        >
+          {/* Drag handle (only visible on hover) */}
+          <div className="absolute right-0 top-1/2 transform -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
+        </div>
+      </div>
+      
+      <span className="text-xs text-spotify-gray-300 w-10">
+        {formatTime(duration)}
+      </span>
+    </div>
+  );
+};
+
+// Volume Control Component
+const VolumeControl: React.FC<VolumeControlProps> = ({
+  volume,
+  onVolumeChange,
+  isMuted,
+  onMuteToggle
+}) => {
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onVolumeChange(parseFloat(e.target.value));
+  };
+  
+  return (
+    <div className="flex items-center gap-2">
+      <button 
+        onClick={onMuteToggle}
+        className="text-spotify-gray-300 hover:text-white"
+        aria-label={isMuted ? 'Unmute' : 'Mute'}
+      >
+        {isMuted || volume === 0 ? <FiVolumeX /> : <FiVolume2 />}
+      </button>
+      
+      <input 
+        type="range"
+        min="0"
+        max="1"
+        step="0.01"
+        value={volume}
+        onChange={handleVolumeChange}
+        className="volume-slider"
+        aria-label="Volume"
+      />
+    </div>
+  );
+};
+
+// Now Playing Component
+const NowPlaying: React.FC<NowPlayingProps> = ({
+  currentItem,
+  isLiked,
+  onToggleLike
+}) => {
+  if (!currentItem) {
+    return (
+      <div className="flex items-center p-4">
+        <div className="text-spotify-gray-300 text-sm">No track playing</div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex items-center p-4">
+      <div className="w-12 h-12 bg-spotify-gray-600 rounded overflow-hidden mr-3 flex-shrink-0">
+        {currentItem.coverUrl ? (
+          <Image 
+            src={currentItem.coverUrl} 
+            alt={currentItem.title} 
+            width={48} 
+            height={48} 
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-podcast-accent-purple to-podcast-accent-blue">
+            <FiPlay className="text-white" />
+          </div>
+        )}
+      </div>
+      
+      <div className="mr-4 overflow-hidden">
+        <div className="text-white font-medium text-sm truncate max-w-[120px] sm:max-w-[200px]">
+          {currentItem.title}
+        </div>
+        <div className="text-spotify-gray-300 text-xs truncate max-w-[120px] sm:max-w-[200px]">
+          {currentItem.artist}
+        </div>
+      </div>
+      
+      <button 
+        onClick={onToggleLike}
+        className={`ml-auto ${isLiked ? 'text-spotify-green' : 'text-spotify-gray-300 hover:text-white'}`}
+        aria-label={isLiked ? 'Unlike' : 'Like'}
+      >
+        <FiHeart />
+      </button>
+    </div>
+  );
+};
+
+// Queue Component
+const Queue: React.FC<QueueProps> = ({
+  queue,
+  currentIndex,
+  onSelectTrack,
+  onClose
+}) => {
+  return (
+    <div className="h-full flex flex-col">
+      <div className="flex items-center justify-between p-4 border-b border-spotify-gray-600">
+        <h3 className="text-white font-bold">Queue</h3>
+        <button 
+          onClick={onClose}
+          className="text-spotify-gray-300 hover:text-white"
+          aria-label="Close queue"
+        >
+          <FiX />
+        </button>
+      </div>
+      
+      <div className="flex-grow overflow-y-auto">
+        {queue.length === 0 ? (
+          <div className="p-4 text-spotify-gray-300 text-center">
+            Your queue is empty
+          </div>
+        ) : (
+          <div className="p-2">
+            <h4 className="px-2 py-3 text-xs text-spotify-gray-300 uppercase font-bold">
+              Now Playing
+            </h4>
+            <div 
+              className="flex items-center p-2 rounded-md bg-spotify-gray-700"
+            >
+              <div className="w-10 h-10 bg-spotify-gray-600 rounded overflow-hidden mr-3 flex-shrink-0">
+                {queue[currentIndex].coverUrl ? (
+                  <Image 
+                    src={queue[currentIndex].coverUrl} 
+                    alt={queue[currentIndex].title} 
+                    width={40} 
+                    height={40} 
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-podcast-accent-purple to-podcast-accent-blue">
+                    <FiPlay className="text-white text-xs" />
+                  </div>
+                )}
+              </div>
+              
+              <div>
+                <div className="text-white font-medium text-sm">
+                  {queue[currentIndex].title}
+                </div>
+                <div className="text-spotify-gray-300 text-xs">
+                  {queue[currentIndex].artist}
+                </div>
+              </div>
+            </div>
+            
+            {queue.length > 1 && (
+              <>
+                <h4 className="px-2 py-3 mt-2 text-xs text-spotify-gray-300 uppercase font-bold">
+                  Next Up
+                </h4>
+                {queue.map((item, index) => (
+                  index !== currentIndex && (
+                    <div 
+                      key={`${item.id}-${index}`}
+                      className="flex items-center p-2 rounded-md hover:bg-spotify-gray-700 cursor-pointer"
+                      onClick={() => onSelectTrack(index)}
+                    >
+                      <div className="w-10 h-10 bg-spotify-gray-600 rounded overflow-hidden mr-3 flex-shrink-0">
+                        {item.coverUrl ? (
+                          <Image 
+                            src={item.coverUrl} 
+                            alt={item.title} 
+                            width={40} 
+                            height={40} 
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-podcast-accent-purple to-podcast-accent-blue">
+                            <FiPlay className="text-white text-xs" />
+                          </div>
+                        )}
+                      </div>
+                      
+                      <div>
+                        <div className="text-white font-medium text-sm">
+                          {item.title}
+                        </div>
+                        <div className="text-spotify-gray-300 text-xs">
+                          {item.artist}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

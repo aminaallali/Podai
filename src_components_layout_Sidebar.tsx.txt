@@ -1,0 +1,366 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import Image from 'next/image';
+import { 
+  FiHome, 
+  FiSearch, 
+  FiList, 
+  FiPlus, 
+  FiHeadphones, 
+  FiSettings, 
+  FiUser, 
+  FiClock, 
+  FiHeart, 
+  FiMenu, 
+  FiX,
+  FiChevronDown,
+  FiChevronUp
+} from 'react-icons/fi';
+import { createLocalStorageProvider, Playlist, Podcast } from '@/lib/podcast-utils';
+
+// Component interfaces
+interface SidebarProps {
+  className?: string;
+}
+
+interface NavLinkProps {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+}
+
+interface PlaylistItemProps {
+  playlist: Playlist;
+  active?: boolean;
+}
+
+interface RecentPodcastItemProps {
+  podcast: Podcast;
+  active?: boolean;
+}
+
+// Main Sidebar Component
+export default function Sidebar({ className = '' }: SidebarProps) {
+  const pathname = usePathname();
+  const [isOpen, setIsOpen] = useState(false);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [recentPodcasts, setRecentPodcasts] = useState<Podcast[]>([]);
+  const [showPlaylists, setShowPlaylists] = useState(true);
+  const [showRecent, setShowRecent] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Initialize storage provider
+  const storageProvider = createLocalStorageProvider();
+
+  // Load playlists and recent podcasts
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setIsLoading(true);
+        
+        // Get user playlists
+        const userPlaylists = await storageProvider.listPlaylists({ 
+          limit: 5,
+          filter: { type: 'user-created' }
+        });
+        setPlaylists(userPlaylists);
+        
+        // Get recent podcasts
+        const recentlyPlayed = await storageProvider.listPodcasts({
+          limit: 3,
+          filter: { 'stats.lastPlayed': { $exists: true } }
+        });
+        setRecentPodcasts(recentlyPlayed);
+        
+        setIsLoading(false);
+      } catch (err) {
+        console.error('Error loading sidebar data:', err);
+        setIsLoading(false);
+      }
+    };
+    
+    fetchData();
+  }, []);
+
+  // Toggle mobile sidebar
+  const toggleSidebar = () => {
+    setIsOpen(!isOpen);
+  };
+
+  // Close sidebar when navigating on mobile
+  const handleNavigation = () => {
+    if (window.innerWidth < 768) {
+      setIsOpen(false);
+    }
+  };
+
+  return (
+    <>
+      {/* Mobile Menu Toggle Button */}
+      <button 
+        className="md:hidden fixed top-4 left-4 z-[var(--z-nav)] text-white p-2 rounded-full bg-spotify-gray-800"
+        onClick={toggleSidebar}
+        aria-label="Toggle menu"
+      >
+        {isOpen ? <FiX size={24} /> : <FiMenu size={24} />}
+      </button>
+      
+      {/* Sidebar */}
+      <aside 
+        className={`sidebar ${isOpen ? 'open' : ''} ${className}`}
+        aria-label="Main navigation"
+      >
+        {/* Logo */}
+        <div className="flex items-center mb-8 px-2">
+          <div className="w-10 h-10 rounded-full bg-spotify-green flex items-center justify-center mr-2">
+            <FiHeadphones className="text-black text-xl" />
+          </div>
+          <h1 className="text-xl font-bold text-white">Podcast Maker</h1>
+        </div>
+        
+        {/* Main Navigation */}
+        <nav className="mb-8">
+          <ul className="space-y-2">
+            <li>
+              <NavLink 
+                href="/" 
+                icon={<FiHome />} 
+                label="Home" 
+                active={pathname === '/'} 
+              />
+            </li>
+            <li>
+              <NavLink 
+                href="/search" 
+                icon={<FiSearch />} 
+                label="Search" 
+                active={pathname === '/search'} 
+              />
+            </li>
+            <li>
+              <NavLink 
+                href="/library" 
+                icon={<FiList />} 
+                label="Your Library" 
+                active={pathname === '/library' || pathname.startsWith('/library/')} 
+              />
+            </li>
+            <li className="pt-4">
+              <NavLink 
+                href="/create" 
+                icon={<FiPlus />} 
+                label="Create Podcast" 
+                active={pathname === '/create'} 
+              />
+            </li>
+          </ul>
+        </nav>
+        
+        {/* Playlists Section */}
+        <div className="mb-6">
+          <button 
+            className="flex items-center justify-between w-full text-spotify-gray-300 hover:text-white px-4 py-2 transition-colors"
+            onClick={() => setShowPlaylists(!showPlaylists)}
+            aria-expanded={showPlaylists}
+          >
+            <div className="flex items-center">
+              <FiList className="mr-2" />
+              <span className="font-medium">Your Playlists</span>
+            </div>
+            {showPlaylists ? <FiChevronUp /> : <FiChevronDown />}
+          </button>
+          
+          {showPlaylists && (
+            <div className="mt-2 space-y-1 max-h-[30vh] overflow-y-auto scrollbar-hidden">
+              {isLoading ? (
+                <div className="px-4 py-2">
+                  <div className="h-4 bg-spotify-gray-600 rounded animate-pulse-slow w-3/4 mb-2"></div>
+                  <div className="h-4 bg-spotify-gray-600 rounded animate-pulse-slow w-2/3"></div>
+                </div>
+              ) : playlists.length > 0 ? (
+                playlists.map(playlist => (
+                  <PlaylistItem 
+                    key={playlist.id} 
+                    playlist={playlist} 
+                    active={pathname === `/playlists/${playlist.id}`} 
+                  />
+                ))
+              ) : (
+                <div className="px-6 py-2 text-xs text-spotify-gray-400">
+                  No playlists yet
+                </div>
+              )}
+              
+              <Link 
+                href="/playlists/create" 
+                className="flex items-center px-6 py-2 text-sm text-spotify-gray-300 hover:text-white transition-colors"
+                onClick={handleNavigation}
+              >
+                <FiPlus className="mr-2 text-xs" />
+                <span>Create Playlist</span>
+              </Link>
+            </div>
+          )}
+        </div>
+        
+        {/* Recently Played Section */}
+        <div className="mb-6">
+          <button 
+            className="flex items-center justify-between w-full text-spotify-gray-300 hover:text-white px-4 py-2 transition-colors"
+            onClick={() => setShowRecent(!showRecent)}
+            aria-expanded={showRecent}
+          >
+            <div className="flex items-center">
+              <FiClock className="mr-2" />
+              <span className="font-medium">Recently Played</span>
+            </div>
+            {showRecent ? <FiChevronUp /> : <FiChevronDown />}
+          </button>
+          
+          {showRecent && (
+            <div className="mt-2 space-y-1 max-h-[30vh] overflow-y-auto scrollbar-hidden">
+              {isLoading ? (
+                <div className="px-4 py-2">
+                  <div className="h-4 bg-spotify-gray-600 rounded animate-pulse-slow w-3/4 mb-2"></div>
+                  <div className="h-4 bg-spotify-gray-600 rounded animate-pulse-slow w-2/3"></div>
+                </div>
+              ) : recentPodcasts.length > 0 ? (
+                recentPodcasts.map(podcast => (
+                  <RecentPodcastItem 
+                    key={podcast.id} 
+                    podcast={podcast} 
+                    active={pathname === `/podcasts/${podcast.id}`} 
+                  />
+                ))
+              ) : (
+                <div className="px-6 py-2 text-xs text-spotify-gray-400">
+                  No recent podcasts
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        
+        {/* User Section */}
+        <div className="mt-auto pt-4 border-t border-spotify-gray-600">
+          <Link 
+            href="/settings" 
+            className="flex items-center px-4 py-2 text-spotify-gray-300 hover:text-white transition-colors"
+            onClick={handleNavigation}
+          >
+            <FiSettings className="mr-3" />
+            <span>Settings</span>
+          </Link>
+          
+          <Link 
+            href="/profile" 
+            className="flex items-center px-4 py-3 text-white"
+            onClick={handleNavigation}
+          >
+            <div className="w-8 h-8 rounded-full bg-spotify-gray-600 flex items-center justify-center mr-3">
+              <FiUser className="text-white" />
+            </div>
+            <span className="font-medium">Your Profile</span>
+          </Link>
+        </div>
+      </aside>
+      
+      {/* Backdrop for mobile */}
+      {isOpen && (
+        <div 
+          className="md:hidden fixed inset-0 bg-black bg-opacity-50 z-[calc(var(--z-sidebar)-1)]"
+          onClick={toggleSidebar}
+          aria-hidden="true"
+        />
+      )}
+    </>
+  );
+}
+
+// NavLink Component
+const NavLink: React.FC<NavLinkProps> = ({ href, icon, label, active }) => {
+  return (
+    <Link 
+      href={href} 
+      className={`flex items-center px-4 py-3 rounded-md transition-colors ${
+        active 
+          ? 'bg-spotify-gray-600 text-white' 
+          : 'text-spotify-gray-300 hover:text-white'
+      }`}
+    >
+      <span className={`mr-4 text-xl ${active ? 'text-spotify-green' : ''}`}>
+        {icon}
+      </span>
+      <span className="font-medium">{label}</span>
+      {active && (
+        <span className="ml-auto w-1 h-4 bg-spotify-green rounded-full"></span>
+      )}
+    </Link>
+  );
+};
+
+// Playlist Item Component
+const PlaylistItem: React.FC<PlaylistItemProps> = ({ playlist, active }) => {
+  return (
+    <Link 
+      href={`/playlists/${playlist.id}`} 
+      className={`flex items-center px-6 py-2 text-sm rounded-md transition-colors ${
+        active 
+          ? 'bg-spotify-gray-600 text-white' 
+          : 'text-spotify-gray-300 hover:text-white'
+      }`}
+    >
+      <div className="w-6 h-6 flex-shrink-0 mr-3 bg-gradient-to-br from-podcast-accent-orange to-podcast-accent-pink rounded overflow-hidden">
+        {playlist.coverImageUrl ? (
+          <Image 
+            src={playlist.coverImageUrl} 
+            alt={playlist.name} 
+            width={24} 
+            height={24} 
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <FiList className="text-xs text-white" />
+          </div>
+        )}
+      </div>
+      <span className="truncate">{playlist.name}</span>
+    </Link>
+  );
+};
+
+// Recent Podcast Item Component
+const RecentPodcastItem: React.FC<RecentPodcastItemProps> = ({ podcast, active }) => {
+  return (
+    <Link 
+      href={`/podcasts/${podcast.id}`} 
+      className={`flex items-center px-6 py-2 text-sm rounded-md transition-colors ${
+        active 
+          ? 'bg-spotify-gray-600 text-white' 
+          : 'text-spotify-gray-300 hover:text-white'
+      }`}
+    >
+      <div className="w-6 h-6 flex-shrink-0 mr-3 bg-gradient-to-br from-podcast-accent-blue to-podcast-accent-purple rounded overflow-hidden">
+        {podcast.coverImageUrl ? (
+          <Image 
+            src={podcast.coverImageUrl} 
+            alt={podcast.title} 
+            width={24} 
+            height={24} 
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <FiHeadphones className="text-xs text-white" />
+          </div>
+        )}
+      </div>
+      <span className="truncate">{podcast.title}</span>
+    </Link>
+  );
+};
